@@ -1,0 +1,344 @@
+<!--
+  ===========================================================================
+  SentinelOps - Sysmon configuration
+  ===========================================================================
+  Purpose : Collect high-value endpoint telemetry for a small SOC lab while
+            keeping event volume low enough for a single-workstation Wazuh
+            deployment.
+  Target  : Sysmon v15 or later (Sysinternals), Windows 10 / 11.
+  Scope   : LABORATORY USE. Tune before using anywhere else.
+
+  Install : Sysmon64.exe -accepteula -i sysmon-config.xml
+  Update  : Sysmon64.exe -c sysmon-config.xml
+  Verify  : Sysmon64.exe -c        (prints the active configuration)
+
+  Filtering model used in this file
+  ................................
+    * ProcessCreate / ProcessTerminate : log EVERYTHING, then exclude a short
+      list of known-good, high-frequency Windows noise. On a workstation this
+      gives complete execution history at an acceptable volume.
+    * NetworkConnect / FileCreate / DnsQuery : INCLUDE only, because logging
+      every connection, file write or DNS lookup would flood the SIEM.
+    * Genuinely noisy event types (ImageLoad, RawAccessRead, ClipboardChange)
+      are disabled with an empty <include/> block, which logs nothing.
+
+  Event IDs produced by this configuration
+  ........................................
+    1  Process creation            11  File created
+    3  Network connection          12/13 Registry key / value set (Run keys)
+    5  Process terminated          17/18 Named pipe created / connected
+    6  Driver loaded               19/20/21 WMI event subscription
+    8  CreateRemoteThread          22 DNS query
+    10 Process access (LSASS only) 23/26 File delete (metadata only)
+    15 File stream created (ADS)   25 Process tampering
+  ===========================================================================
+-->
+<Sysmon schemaversion="4.90">
+
+  <!-- SHA256 only: one strong hash keeps events small and is enough for
+       IOC lookups in VirusTotal / MISP. Add MD5 only if a tool requires it. -->
+  <HashAlgorithms>SHA256</HashAlgorithms>
+
+  <!-- Do NOT resolve IPs to names inside Sysmon: it adds latency and
+       generates its own DNS traffic. Enrichment is done at analysis time. -->
+  <DnsLookup>False</DnsLookup>
+
+  <EventFiltering>
+
+    <!-- ==================================================================
+         EVENT ID 1 - PROCESS CREATION
+         The single most valuable event for a SOC L1: image, full command
+         line, parent image, parent command line, user, integrity level,
+         hashes, logon ID. Everything is logged except predictable noise.
+         ================================================================== -->
+    <RuleGroup name="ProcessCreate - exclude known noise" groupRelation="or">
+      <ProcessCreate onmatch="exclude">
+        <!-- Sysmon must never log its own activity in a loop -->
+        <Image condition="end with">\Sysmon.exe</Image>
+        <Image condition="end with">\Sysmon64.exe</Image>
+        <!-- Wazuh agent's own helper processes (high frequency, trusted) -->
+        <Image condition="end with">\wazuh-agent.exe</Image>
+        <Image condition="end with">\wazuh-modulesd.exe</Image>
+        <!-- Windows housekeeping that fires constantly on an idle desktop -->
+        <Image condition="is">C:\Windows\System32\SearchIndexer.exe</Image>
+        <Image condition="is">C:\Windows\System32\SearchProtocolHost.exe</Image>
+        <Image condition="is">C:\Windows\System32\SearchFilterHost.exe</Image>
+        <Image condition="is">C:\Windows\System32\CompatTelRunner.exe</Image>
+        <Image condition="is">C:\Windows\System32\MpCmdRun.exe</Image>
+        <Image condition="is">C:\Windows\System32\backgroundTaskHost.exe</Image>
+        <Image condition="is">C:\Windows\System32\RuntimeBroker.exe</Image>
+        <Image condition="is">C:\Windows\System32\SgrmBroker.exe</Image>
+        <Image condition="is">C:\Windows\System32\wermgr.exe</Image>
+        <Image condition="is">C:\Windows\System32\conhost.exe</Image>
+        <Image condition="is">C:\Windows\System32\dwm.exe</Image>
+        <!-- Windows Update / servicing stack -->
+        <Image condition="is">C:\Windows\System32\TiWorker.exe</Image>
+        <Image condition="is">C:\Windows\System32\MusNotification.exe</Image>
+        <Image condition="is">C:\Windows\System32\MusNotificationUx.exe</Image>
+      </ProcessCreate>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 3 - NETWORK CONNECTION
+         INCLUDE only. We care about interpreters, LOLBins and anything
+         running from a user-writable directory making a connection - the
+         classic download / C2 pattern. Normal browser traffic is ignored.
+         ================================================================== -->
+    <RuleGroup name="NetworkConnect - interpreters, LOLBins, temp paths" groupRelation="or">
+      <NetworkConnect onmatch="include">
+        <!-- Script interpreters and shells should rarely talk to the network -->
+        <Image condition="end with">\powershell.exe</Image>
+        <Image condition="end with">\pwsh.exe</Image>
+        <Image condition="end with">\cmd.exe</Image>
+        <Image condition="end with">\wscript.exe</Image>
+        <Image condition="end with">\cscript.exe</Image>
+        <Image condition="end with">\mshta.exe</Image>
+        <!-- Living-off-the-land download utilities -->
+        <Image condition="end with">\certutil.exe</Image>
+        <Image condition="end with">\bitsadmin.exe</Image>
+        <Image condition="end with">\curl.exe</Image>
+        <Image condition="end with">\regsvr32.exe</Image>
+        <Image condition="end with">\rundll32.exe</Image>
+        <Image condition="end with">\msiexec.exe</Image>
+        <!-- Anything executing from a user-writable staging directory -->
+        <Image condition="contains">\AppData\Local\Temp\</Image>
+        <Image condition="contains">\Users\Public\</Image>
+        <Image condition="contains">\Downloads\</Image>
+        <!-- Remote administration / lateral movement ports -->
+        <DestinationPort condition="is">3389</DestinationPort>
+        <DestinationPort condition="is">445</DestinationPort>
+        <DestinationPort condition="is">5985</DestinationPort>
+        <DestinationPort condition="is">5986</DestinationPort>
+        <DestinationPort condition="is">4444</DestinationPort>
+      </NetworkConnect>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 5 - PROCESS TERMINATED
+         Cheap to collect and it completes the process timeline: it tells the
+         analyst how long a suspicious process actually lived. Same noise
+         exclusions as Event ID 1 so the two views stay consistent.
+         ================================================================== -->
+    <RuleGroup name="ProcessTerminate - exclude known noise" groupRelation="or">
+      <ProcessTerminate onmatch="exclude">
+        <Image condition="end with">\Sysmon.exe</Image>
+        <Image condition="end with">\Sysmon64.exe</Image>
+        <Image condition="end with">\wazuh-agent.exe</Image>
+        <Image condition="end with">\wazuh-modulesd.exe</Image>
+        <Image condition="is">C:\Windows\System32\SearchProtocolHost.exe</Image>
+        <Image condition="is">C:\Windows\System32\SearchFilterHost.exe</Image>
+        <Image condition="is">C:\Windows\System32\conhost.exe</Image>
+        <Image condition="is">C:\Windows\System32\RuntimeBroker.exe</Image>
+        <Image condition="is">C:\Windows\System32\backgroundTaskHost.exe</Image>
+        <Image condition="is">C:\Windows\System32\MpCmdRun.exe</Image>
+      </ProcessTerminate>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 6 - DRIVER LOADED
+         Low volume, high value: unsigned or newly installed kernel drivers
+         are a strong indicator of rootkits or "bring your own vulnerable
+         driver" activity. Microsoft-signed drivers are excluded.
+         ================================================================== -->
+    <RuleGroup name="DriverLoad - non Microsoft only" groupRelation="or">
+      <DriverLoad onmatch="exclude">
+        <Signature condition="contains">Microsoft Windows</Signature>
+        <Signature condition="contains">Microsoft Corporation</Signature>
+      </DriverLoad>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 7 - IMAGE LOADED : DISABLED
+         An empty include block logs nothing. Image loads are by far the
+         noisiest Sysmon event (thousands per minute) and are not needed for
+         the detections in this lab.
+         ================================================================== -->
+    <ImageLoad onmatch="include" />
+
+    <!-- ==================================================================
+         EVENT ID 8 - CREATE REMOTE THREAD
+         Classic process-injection primitive. Volume is naturally tiny, so
+         everything is logged except two well-known benign sources.
+         ================================================================== -->
+    <RuleGroup name="CreateRemoteThread" groupRelation="or">
+      <CreateRemoteThread onmatch="exclude">
+        <SourceImage condition="is">C:\Windows\System32\svchost.exe</SourceImage>
+        <SourceImage condition="is">C:\Windows\System32\wbem\WmiPrvSE.exe</SourceImage>
+      </CreateRemoteThread>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 9 - RAW ACCESS READ : DISABLED
+         Mostly generated by backup and AV software in a lab.
+         ================================================================== -->
+    <RawAccessRead onmatch="include" />
+
+    <!-- ==================================================================
+         EVENT ID 10 - PROCESS ACCESS
+         Restricted to handles opened against LSASS, which is the telemetry
+         behind credential dumping detection (MITRE T1003.001).
+         ================================================================== -->
+    <RuleGroup name="ProcessAccess - LSASS only" groupRelation="and">
+      <ProcessAccess onmatch="include">
+        <TargetImage condition="is">C:\Windows\system32\lsass.exe</TargetImage>
+      </ProcessAccess>
+    </RuleGroup>
+    <RuleGroup name="ProcessAccess - trusted callers" groupRelation="or">
+      <ProcessAccess onmatch="exclude">
+        <SourceImage condition="is">C:\Windows\System32\wbem\WmiPrvSE.exe</SourceImage>
+        <SourceImage condition="is">C:\Windows\System32\svchost.exe</SourceImage>
+        <SourceImage condition="contains">\Windows Defender\</SourceImage>
+      </ProcessAccess>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 11 - FILE CREATE
+         INCLUDE only. Targets the directories attackers stage tooling in and
+         the file types used for execution and persistence.
+         ================================================================== -->
+    <RuleGroup name="FileCreate - staging directories and executable types" groupRelation="or">
+      <FileCreate onmatch="include">
+        <!-- User-writable staging locations -->
+        <TargetFilename condition="contains">\AppData\Local\Temp\</TargetFilename>
+        <TargetFilename condition="contains">\AppData\Roaming\</TargetFilename>
+        <TargetFilename condition="contains">\Users\Public\</TargetFilename>
+        <TargetFilename condition="contains">\Downloads\</TargetFilename>
+        <TargetFilename condition="contains">C:\Windows\Temp\</TargetFilename>
+        <!-- Autostart persistence locations -->
+        <TargetFilename condition="contains">\Start Menu\Programs\Startup\</TargetFilename>
+        <TargetFilename condition="contains">C:\Windows\System32\Tasks\</TargetFilename>
+        <!-- Executable / script extensions anywhere on disk -->
+        <TargetFilename condition="end with">.exe</TargetFilename>
+        <TargetFilename condition="end with">.dll</TargetFilename>
+        <TargetFilename condition="end with">.ps1</TargetFilename>
+        <TargetFilename condition="end with">.bat</TargetFilename>
+        <TargetFilename condition="end with">.cmd</TargetFilename>
+        <TargetFilename condition="end with">.vbs</TargetFilename>
+        <TargetFilename condition="end with">.js</TargetFilename>
+        <TargetFilename condition="end with">.hta</TargetFilename>
+        <TargetFilename condition="end with">.lnk</TargetFilename>
+        <TargetFilename condition="end with">.scr</TargetFilename>
+      </FileCreate>
+    </RuleGroup>
+    <RuleGroup name="FileCreate - exclude update noise" groupRelation="or">
+      <FileCreate onmatch="exclude">
+        <Image condition="is">C:\Windows\System32\svchost.exe</Image>
+        <Image condition="contains">\Windows Defender\</Image>
+        <TargetFilename condition="contains">\WinSxS\</TargetFilename>
+        <TargetFilename condition="contains">\SoftwareDistribution\</TargetFilename>
+        <TargetFilename condition="contains">\Package Cache\</TargetFilename>
+      </FileCreate>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 12/13/14 - REGISTRY
+         INCLUDE only, limited to the autostart and service keys that matter
+         for persistence. Registry events are extremely noisy otherwise.
+         ================================================================== -->
+    <RuleGroup name="RegistryEvent - autostart and services" groupRelation="or">
+      <RegistryEvent onmatch="include">
+        <TargetObject condition="contains">\CurrentVersion\Run</TargetObject>
+        <TargetObject condition="contains">\CurrentVersion\RunOnce</TargetObject>
+        <TargetObject condition="contains">\Explorer\Shell Folders\Startup</TargetObject>
+        <TargetObject condition="contains">\CurrentControlSet\Services\</TargetObject>
+        <TargetObject condition="contains">\Image File Execution Options\</TargetObject>
+        <TargetObject condition="contains">\Winlogon\Shell</TargetObject>
+        <TargetObject condition="contains">\Winlogon\Userinit</TargetObject>
+        <!-- Defender tampering (MITRE T1562.001) -->
+        <TargetObject condition="contains">\Windows Defender\Exclusions\</TargetObject>
+        <TargetObject condition="contains">\Windows Defender\DisableAntiSpyware</TargetObject>
+      </RegistryEvent>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 15 - FILE CREATE STREAM HASH
+         Alternate Data Streams, including the Mark-of-the-Web written on
+         downloaded files. Useful to prove a file came from the internet.
+         ================================================================== -->
+    <RuleGroup name="FileCreateStreamHash - downloaded content" groupRelation="or">
+      <FileCreateStreamHash onmatch="include">
+        <TargetFilename condition="end with">.exe</TargetFilename>
+        <TargetFilename condition="end with">.dll</TargetFilename>
+        <TargetFilename condition="end with">.ps1</TargetFilename>
+        <TargetFilename condition="end with">.hta</TargetFilename>
+        <TargetFilename condition="end with">.js</TargetFilename>
+        <TargetFilename condition="end with">.docm</TargetFilename>
+        <TargetFilename condition="end with">.xlsm</TargetFilename>
+        <TargetFilename condition="end with">.zip</TargetFilename>
+      </FileCreateStreamHash>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 17/18 - NAMED PIPES
+         Narrow include list: the pipe names used by common remote-execution
+         and post-exploitation tooling. Very low volume.
+         ================================================================== -->
+    <RuleGroup name="PipeEvent - remote execution tooling" groupRelation="or">
+      <PipeEvent onmatch="include">
+        <PipeName condition="contains">\PSEXESVC</PipeName>
+        <PipeName condition="contains">\paexec</PipeName>
+        <PipeName condition="contains">\remcom</PipeName>
+        <PipeName condition="contains">\atsvc</PipeName>
+        <PipeName condition="contains">\winreg</PipeName>
+        <PipeName condition="contains">\svcctl</PipeName>
+      </PipeEvent>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 19/20/21 - WMI EVENT SUBSCRIPTION
+         Permanent WMI subscriptions are a stealthy persistence mechanism and
+         are almost never created legitimately on a workstation. Log all.
+         ================================================================== -->
+    <WmiEvent onmatch="exclude" />
+
+    <!-- ==================================================================
+         EVENT ID 22 - DNS QUERY
+         INCLUDE only, by process. We want to know when an interpreter or a
+         LOLBin resolves a name; we do not want the browser's DNS history.
+         ================================================================== -->
+    <RuleGroup name="DnsQuery - interpreters and LOLBins" groupRelation="or">
+      <DnsQuery onmatch="include">
+        <Image condition="end with">\powershell.exe</Image>
+        <Image condition="end with">\pwsh.exe</Image>
+        <Image condition="end with">\cmd.exe</Image>
+        <Image condition="end with">\wscript.exe</Image>
+        <Image condition="end with">\cscript.exe</Image>
+        <Image condition="end with">\mshta.exe</Image>
+        <Image condition="end with">\rundll32.exe</Image>
+        <Image condition="end with">\regsvr32.exe</Image>
+        <Image condition="end with">\certutil.exe</Image>
+        <Image condition="end with">\bitsadmin.exe</Image>
+        <Image condition="end with">\curl.exe</Image>
+        <Image condition="contains">\AppData\Local\Temp\</Image>
+        <Image condition="contains">\Users\Public\</Image>
+        <Image condition="contains">\Downloads\</Image>
+      </DnsQuery>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 23/26 - FILE DELETE (metadata only, no archiving)
+         Anti-forensic deletion of executables and scripts from staging
+         directories. ArchiveDirectory is intentionally NOT configured, so
+         Sysmon records the deletion without keeping a copy of the file.
+         ================================================================== -->
+    <RuleGroup name="FileDelete - scripts and binaries in staging paths" groupRelation="and">
+      <FileDeleteDetected onmatch="include">
+        <TargetFilename condition="contains any">\AppData\Local\Temp\;\Users\Public\;C:\Windows\Temp\</TargetFilename>
+        <TargetFilename condition="contains any">.exe;.dll;.ps1;.bat;.vbs;.hta</TargetFilename>
+      </FileDeleteDetected>
+    </RuleGroup>
+
+    <!-- ==================================================================
+         EVENT ID 24 - CLIPBOARD : DISABLED
+         Privacy sensitive and not required for these detections.
+         ================================================================== -->
+    <ClipboardChange onmatch="include" />
+
+    <!-- ==================================================================
+         EVENT ID 25 - PROCESS TAMPERING
+         Process hollowing / herpaderping indicators. Rare, so log all.
+         ================================================================== -->
+    <ProcessTampering onmatch="exclude" />
+
+  </EventFiltering>
+</Sysmon>

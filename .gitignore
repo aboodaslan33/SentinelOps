@@ -1,0 +1,70 @@
+# ---------------------------------------------------------------------------
+# SentinelOps - .gitignore
+# Purpose: keep secrets, raw logs and large binaries OUT of the public repo.
+# ---------------------------------------------------------------------------
+
+# --- Secrets / credentials (NEVER commit) ----------------------------------
+*.key
+*.pem
+*.pfx
+*.p12
+*.crt
+*.cer
+*.env
+.env
+.env.*
+secrets.*
+credentials.*
+wazuh-passwords.txt
+wazuh-install-files.tar
+wazuh-certificates.tar
+agent-auth*.key
+authd.pass
+*password*
+*secret*
+*token*
+
+# --- Raw log / alert exports (may contain hostnames, users, internal IPs) ---
+*.evtx
+*.evt
+alerts.json
+alerts.log
+archives.json
+archives.log
+ossec.log
+/exports/
+/raw-logs/
+/evidence/
+
+# --- Wazuh / OS artefacts ---------------------------------------------------
+ossec.conf.bak
+*.rpm
+*.deb
+*.msi
+*.exe
+*.zip
+*.7z
+*.tar.gz
+Sysmon*.exe
+Sysmon*.zip
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# --- Editors / OS ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Screenshots: keep the folder + README, allow curated PNGs -------------
+# (Delete the next two lines if you prefer to review every image manually.)
+screenshots/*.raw.png
+screenshots/unredacted/

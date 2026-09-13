@@ -1,0 +1,504 @@
+<!--
+  ===========================================================================
+  SentinelOps - Custom Wazuh detection rules
+  ===========================================================================
+  File location on the manager : /var/ossec/etc/rules/local_rules.xml
+  Rule ID range               : 100100 to 100199  (100000+ is reserved for
+                                user defined rules in Wazuh)
+  Apply with                  : sudo systemctl restart wazuh-manager
+  Test with                   : sudo /var/ossec/bin/wazuh-logtest
+
+  ...........................................................................
+  DESIGN NOTE : why every rule uses <if_group> instead of <if_sid>
+  ...........................................................................
+  Wazuh evaluates rules as a tree. Only ONE rule matches an event at each
+  level, and the built in ruleset is loaded before local_rules.xml, so a
+  custom rule written as a SIBLING of a built in rule will usually never
+  fire. The reliable pattern is to make the custom rule a CHILD of whatever
+  already matched.
+
+  Built in Windows rule IDs change between Wazuh releases, but the GROUP
+  names are stable:
+      windows              every Windows eventchannel rule
+      sysmon_event1        Sysmon Event ID 1  (process creation)
+      sysmon_event3        Sysmon Event ID 3  (network connection)
+      sysmon_event_11      Sysmon Event ID 11 (file created)
+      sysmon_event_22      Sysmon Event ID 22 (DNS query)
+  (Sysmon groups 1 to 9 have no underscore before the number, 10 and above
+  do. That is a quirk of the Wazuh ruleset, not a typo.)
+
+  Chaining on the group therefore survives upgrades and does not depend on
+  memorised rule IDs. ALWAYS confirm the behaviour on your own deployment
+  with wazuh-logtest before trusting a rule. The procedure is documented in
+  /documentation/detection-engineering.md.
+
+  ...........................................................................
+  FIELD REFERENCE (Wazuh lowercases the first letter of every EventData name)
+  ...........................................................................
+      win.system.eventID              win.eventdata.targetUserName
+      win.system.computer             win.eventdata.subjectUserName
+      win.system.providerName         win.eventdata.ipAddress
+      win.system.channel              win.eventdata.logonType
+      win.eventdata.image             win.eventdata.commandLine
+      win.eventdata.parentImage       win.eventdata.parentCommandLine
+      win.eventdata.user              win.eventdata.scriptBlockText
+      win.eventdata.targetUserName    win.eventdata.memberName
+
+  ...........................................................................
+  SEVERITY MODEL USED IN THIS LAB (Wazuh level to SOC severity)
+  ...........................................................................
+      0 to 3   Informational   context only, no ticket
+      4 to 7   Low             review during the shift
+      8 to 11  Medium          triage within 1 hour
+      12 to 14 High            triage immediately
+      15       Critical        confirmed compromise, escalate at once
+
+  LABORATORY USE ONLY. Tune thresholds before using anywhere else.
+  ===========================================================================
+-->
+
+<group name="sentinelops,">
+
+  <!-- =======================================================================
+       SCENARIO 1  -  BRUTE FORCE / FAILED AUTHENTICATION
+       Data source: Windows Security log, Event ID 4625
+       MITRE: T1110 Brute Force (Credential Access)
+       ======================================================================= -->
+
+  <!-- 100100: base event. Level 3 on purpose: ONE failed logon is normal
+       (mistyped password). The value of this rule is that it normalises the
+       fields the correlation rules below depend on. -->
+  <rule id="100100" level="3">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4625$</field>
+    <description>SentinelOps: Windows failed logon for user $(win.eventdata.targetUserName) from $(win.eventdata.ipAddress) [logon type $(win.eventdata.logonType)]</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failed,win_authentication_failed,</group>
+  </rule>
+
+  <!-- 100101: correlation. 8 or more failures from the SAME source IP inside
+       120 seconds. same_field keeps one noisy host from being merged with
+       another. Threshold chosen from the lab baseline: a real user rarely
+       fails more than 3 times before using the password reset flow. -->
+  <rule id="100101" level="10" frequency="8" timeframe="120">
+    <if_matched_sid>100100</if_matched_sid>
+    <same_field>win.eventdata.ipAddress</same_field>
+    <description>SentinelOps: Possible brute force - 8 or more failed logons from $(win.eventdata.ipAddress) within 120 seconds</description>
+    <mitre>
+      <id>T1110.001</id>
+    </mitre>
+    <group>authentication_failures,brute_force,</group>
+  </rule>
+
+  <!-- 100102: the alert that actually matters. A SUCCESSFUL logon from the
+       same source IP that just produced a burst of failures means the guess
+       may have worked. This is a High severity, escalate immediately. -->
+  <rule id="100102" level="12" timeframe="600">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4624$</field>
+    <if_matched_sid>100101</if_matched_sid>
+    <same_field>win.eventdata.ipAddress</same_field>
+    <description>SentinelOps: Possible SUCCESSFUL brute force - logon succeeded for $(win.eventdata.targetUserName) from $(win.eventdata.ipAddress) after repeated failures</description>
+    <mitre>
+      <id>T1110.001</id>
+      <id>T1078.003</id>
+    </mitre>
+    <group>authentication_success,brute_force,</group>
+  </rule>
+
+  <!-- 100103: account lockout. Confirms the threshold policy fired and is a
+       useful corroborating artefact in the incident report. -->
+  <rule id="100103" level="8">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4740$</field>
+    <description>SentinelOps: Account $(win.eventdata.targetUserName) locked out after repeated failed logons</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>account_lockout,</group>
+  </rule>
+
+  <!-- 100104: password spraying shape - many DIFFERENT usernames failing
+       from one source. Distinguished from 100101 by breadth, not depth. -->
+  <rule id="100104" level="12" frequency="10" timeframe="300">
+    <if_matched_sid>100100</if_matched_sid>
+    <same_field>win.eventdata.ipAddress</same_field>
+    <different_field>win.eventdata.targetUserName</different_field>
+    <description>SentinelOps: Possible password spraying - failed logons against multiple accounts from $(win.eventdata.ipAddress)</description>
+    <mitre>
+      <id>T1110.003</id>
+    </mitre>
+    <group>authentication_failures,password_spraying,</group>
+  </rule>
+
+
+  <!-- =======================================================================
+       SCENARIO 2  -  SUSPICIOUS POWERSHELL ACTIVITY
+       Data source: Sysmon Event ID 1, PowerShell Operational 4104
+       MITRE: T1059.001 PowerShell (Execution)
+       ======================================================================= -->
+
+  <!-- 100110: every PowerShell launch, kept at informational level so it can
+       be used for hunting and as a parent for the rules below. -->
+  <rule id="100110" level="3">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.originalFileName">(?i)powershell\.exe|pwsh\.dll</field>
+    <description>SentinelOps: PowerShell executed by $(win.eventdata.user) - parent $(win.eventdata.parentImage)</description>
+    <mitre>
+      <id>T1059.001</id>
+    </mitre>
+    <group>powershell,</group>
+  </rule>
+
+  <!-- 100111: suspicious command line switches. Each individual switch has a
+       legitimate use, but together they describe the "run silently, ignore
+       policy, hide the window, hide the code" pattern used by droppers.
+       Matching on the abbreviations too (-w, -nop, -e) is deliberate:
+       PowerShell accepts any unambiguous prefix of a parameter name. -->
+  <rule id="100111" level="10">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.image">(?i)\\powershell\.exe|\\pwsh\.exe</field>
+    <field name="win.eventdata.commandLine">(?i)-enc|-encodedcommand|-e |-ec |-w hidden|-windowstyle hidden|-nop|-noprofile|-exec bypass|-executionpolicy bypass|-nonI</field>
+    <description>SentinelOps: Suspicious PowerShell command line (hidden window / encoded / policy bypass) executed by $(win.eventdata.user)</description>
+    <mitre>
+      <id>T1059.001</id>
+      <id>T1027.010</id>
+    </mitre>
+    <group>powershell,suspicious_process,</group>
+  </rule>
+
+  <!-- 100112: parent-child anomaly. An Office application or a script host
+       should never spawn a shell. This is the single highest fidelity
+       phishing detection available from process telemetry alone. -->
+  <rule id="100112" level="12">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.parentImage">(?i)\\winword\.exe|\\excel\.exe|\\powerpnt\.exe|\\outlook\.exe|\\msaccess\.exe|\\wscript\.exe|\\cscript\.exe|\\mshta\.exe</field>
+    <field name="win.eventdata.image">(?i)\\powershell\.exe|\\pwsh\.exe|\\cmd\.exe|\\wscript\.exe|\\cscript\.exe|\\mshta\.exe|\\rundll32\.exe|\\regsvr32\.exe</field>
+    <description>SentinelOps: Office or script host $(win.eventdata.parentImage) spawned $(win.eventdata.image) - possible malicious document</description>
+    <mitre>
+      <id>T1204.002</id>
+      <id>T1059.001</id>
+    </mitre>
+    <group>powershell,suspicious_parent,</group>
+  </rule>
+
+  <!-- 100113: script block logging (Event ID 4104) shows the DE-OBFUSCATED
+       code, so it catches download cradles even when the command line was
+       Base64 encoded. This is why script block logging must be enabled. -->
+  <rule id="100113" level="12">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4104$</field>
+    <field name="win.eventdata.scriptBlockText">(?i)downloadstring|downloadfile|downloaddata|invoke-webrequest|invoke-restmethod|net\.webclient|start-bitstransfer|iex |invoke-expression|frombase64string</field>
+    <description>SentinelOps: PowerShell script block contains a download or in-memory execution cradle on $(win.system.computer)</description>
+    <mitre>
+      <id>T1059.001</id>
+      <id>T1105</id>
+    </mitre>
+    <group>powershell,script_block,</group>
+  </rule>
+
+  <!-- 100114: PowerShell making an outbound network connection. Pairs with
+       100113 to confirm the download actually happened. -->
+  <rule id="100114" level="10">
+    <if_group>sysmon_event3</if_group>
+    <field name="win.eventdata.image">(?i)\\powershell\.exe|\\pwsh\.exe|\\cmd\.exe|\\wscript\.exe|\\cscript\.exe|\\mshta\.exe</field>
+    <description>SentinelOps: Interpreter $(win.eventdata.image) connected to $(win.eventdata.destinationIp):$(win.eventdata.destinationPort)</description>
+    <mitre>
+      <id>T1059.001</id>
+      <id>T1105</id>
+    </mitre>
+    <group>powershell,network_connection,</group>
+  </rule>
+
+  <!-- 100115: tampering with logging or defences from PowerShell. -->
+  <rule id="100115" level="13">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4104$</field>
+    <field name="win.eventdata.scriptBlockText">(?i)set-mppreference|add-mppreference -exclusionpath|disablerealtimemonitoring|clear-eventlog|remove-eventlog|wevtutil cl</field>
+    <description>SentinelOps: PowerShell attempted to disable defences or clear logs on $(win.system.computer)</description>
+    <mitre>
+      <id>T1562.001</id>
+      <id>T1070.001</id>
+    </mitre>
+    <group>powershell,defense_evasion,</group>
+  </rule>
+
+
+  <!-- =======================================================================
+       SCENARIO 3  -  NEW USER ACCOUNT CREATION
+       Data source: Windows Security log, Event ID 4720 / 4732 / 4726
+       MITRE: T1136.001 Create Account - Local Account (Persistence)
+       ======================================================================= -->
+
+  <!-- 100120: any local account creation. Level 8 (Medium) because on a
+       single user workstation account creation is ALWAYS worth a look, even
+       when it turns out to be IT provisioning. -->
+  <rule id="100120" level="8">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4720$</field>
+    <description>SentinelOps: Local user account $(win.eventdata.targetUserName) created on $(win.system.computer) by $(win.eventdata.subjectUserName)</description>
+    <mitre>
+      <id>T1136.001</id>
+    </mitre>
+    <group>adduser,account_created,</group>
+  </rule>
+
+  <!-- 100121: the escalation pattern. A brand new account being added to a
+       privileged local group within 5 minutes of creation is the classic
+       "create a backdoor admin" sequence. High severity. -->
+  <rule id="100121" level="13" timeframe="300">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4732$</field>
+    <if_matched_sid>100120</if_matched_sid>
+    <description>SentinelOps: Newly created account $(win.eventdata.memberName) was added to a privileged group within 5 minutes - possible backdoor account</description>
+    <mitre>
+      <id>T1136.001</id>
+      <id>T1098.007</id>
+    </mitre>
+    <group>adduser,privilege_escalation,</group>
+  </rule>
+
+  <!-- 100122: account enabled / password set immediately after creation.
+       Useful corroboration for the incident timeline. -->
+  <rule id="100122" level="5">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4722$|^4724$|^4738$</field>
+    <description>SentinelOps: Account $(win.eventdata.targetUserName) was enabled, reset or modified by $(win.eventdata.subjectUserName)</description>
+    <mitre>
+      <id>T1098</id>
+    </mitre>
+    <group>account_changed,</group>
+  </rule>
+
+  <!-- 100123: account deletion. Often the clean up step of an intrusion, and
+       also a genuine impact technique when a real user loses access. -->
+  <rule id="100123" level="8">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4726$</field>
+    <description>SentinelOps: Local user account $(win.eventdata.targetUserName) was DELETED on $(win.system.computer) by $(win.eventdata.subjectUserName)</description>
+    <mitre>
+      <id>T1531</id>
+    </mitre>
+    <group>account_deleted,</group>
+  </rule>
+
+
+  <!-- =======================================================================
+       SCENARIO 4  -  SUSPICIOUS PROCESS EXECUTION
+       Data source: Sysmon Event ID 1 (and Security 4688 as a backup)
+       MITRE: T1059, T1218, T1082 / T1087 / T1033 / T1016 discovery
+       ======================================================================= -->
+
+  <!-- 100130: single discovery command. Informational on its own - admins
+       and scripts run whoami and ipconfig all day. -->
+  <rule id="100130" level="3">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.image">(?i)\\whoami\.exe|\\systeminfo\.exe|\\ipconfig\.exe|\\net\.exe|\\net1\.exe|\\nltest\.exe|\\quser\.exe|\\tasklist\.exe|\\arp\.exe|\\route\.exe|\\netstat\.exe</field>
+    <description>SentinelOps: Discovery command $(win.eventdata.image) executed by $(win.eventdata.user)</description>
+    <mitre>
+      <id>T1082</id>
+    </mitre>
+    <group>discovery,</group>
+  </rule>
+
+  <!-- 100131: the pattern that matters. Five or more different discovery
+       commands on the same host inside 60 seconds is host reconnaissance,
+       not an administrator troubleshooting. -->
+  <rule id="100131" level="12" frequency="5" timeframe="60">
+    <if_matched_sid>100130</if_matched_sid>
+    <same_field>win.system.computer</same_field>
+    <different_field>win.eventdata.image</different_field>
+    <description>SentinelOps: Host reconnaissance - multiple discovery commands executed on $(win.system.computer) within 60 seconds</description>
+    <mitre>
+      <id>T1082</id>
+      <id>T1087.001</id>
+      <id>T1033</id>
+      <id>T1016</id>
+    </mitre>
+    <group>discovery,recon,</group>
+  </rule>
+
+  <!-- 100132: living off the land binaries used to download or execute
+       remote content. These command line shapes have no benign explanation
+       on a user workstation. -->
+  <rule id="100132" level="13">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.commandLine">(?i)certutil(\.exe)?.{0,80}(-urlcache|-decode|-encode)|bitsadmin(\.exe)?.{0,80}/transfer|mshta(\.exe)?.{0,80}(http|javascript:|vbscript:)|regsvr32(\.exe)?.{0,80}(/i:http|scrobj\.dll)|rundll32(\.exe)?.{0,80}(javascript:|http)</field>
+    <description>SentinelOps: Living off the land binary used to download or execute remote content - $(win.eventdata.commandLine)</description>
+    <mitre>
+      <id>T1218</id>
+      <id>T1105</id>
+    </mitre>
+    <group>lolbin,suspicious_process,</group>
+  </rule>
+
+  <!-- 100133: execution from a user writable staging directory. Legitimate
+       installers do this occasionally, so this is Medium, not High: it is a
+       strong PIVOT, not a verdict. -->
+  <rule id="100133" level="10">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.image">(?i)\\AppData\\Local\\Temp\\|\\Users\\Public\\|\\Downloads\\|C:\\Windows\\Temp\\|\\AppData\\Roaming\\</field>
+    <description>SentinelOps: Process executed from a user writable staging directory - $(win.eventdata.image)</description>
+    <mitre>
+      <id>T1204.002</id>
+    </mitre>
+    <group>suspicious_process,</group>
+  </rule>
+
+  <!-- 100134: masquerading. A process whose on disk name does not match the
+       OriginalFileName recorded in the PE header has been renamed, which is
+       a deliberate evasion step. Requires Sysmon (4688 cannot do this). -->
+  <rule id="100134" level="12">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.originalFileName">(?i)^(powershell\.exe|cmd\.exe|psexec\.c|mimikatz\.exe|procdump)</field>
+    <field name="win.eventdata.image" negate="yes">(?i)\\powershell\.exe|\\cmd\.exe|\\psexec(64)?\.exe|\\procdump(64)?\.exe</field>
+    <description>SentinelOps: Possible masquerading - image $(win.eventdata.image) does not match original file name $(win.eventdata.originalFileName)</description>
+    <mitre>
+      <id>T1036.003</id>
+    </mitre>
+    <group>masquerading,suspicious_process,</group>
+  </rule>
+
+
+  <!-- =======================================================================
+       SCENARIO 5  -  PRIVILEGE ESCALATION / ADMINISTRATIVE ACTIVITY
+       Data source: Security 4732 / 4672 / 4698 / 4697, Sysmon Event ID 1
+       MITRE: T1098.007, T1078.003, T1548.002, T1053.005, T1543.003
+       ======================================================================= -->
+
+  <!-- 100140: membership change on a privileged local group. On a single
+       user workstation this should happen only during IT provisioning. -->
+  <rule id="100140" level="12">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4732$</field>
+    <field name="win.eventdata.targetUserName">(?i)^Administrators$|^Remote Desktop Users$|^Backup Operators$|^Power Users$</field>
+    <description>SentinelOps: $(win.eventdata.memberName) was added to privileged group $(win.eventdata.targetUserName) on $(win.system.computer) by $(win.eventdata.subjectUserName)</description>
+    <mitre>
+      <id>T1098.007</id>
+    </mitre>
+    <group>privilege_escalation,group_membership,</group>
+  </rule>
+
+  <!-- 100141: special privileges assigned at logon. Fires for every admin
+       logon, so the built in service accounts are excluded and the level is
+       kept Low - this is CONTEXT for an investigation, not an alert to chase
+       on its own. -->
+  <rule id="100141" level="5">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4672$</field>
+    <field name="win.eventdata.subjectUserName" negate="yes">(?i)^SYSTEM$|^LOCAL SERVICE$|^NETWORK SERVICE$|\$$</field>
+    <description>SentinelOps: Administrative privileges assigned to logon of $(win.eventdata.subjectUserName) on $(win.system.computer)</description>
+    <mitre>
+      <id>T1078.003</id>
+    </mitre>
+    <group>privileged_logon,</group>
+  </rule>
+
+  <!-- 100142: known UAC bypass launchers. fodhelper, computerdefaults and
+       sdclt are auto elevating Microsoft binaries that attackers hijack via
+       the registry. A child process under them is the detection. -->
+  <rule id="100142" level="13">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.parentImage">(?i)\\fodhelper\.exe|\\computerdefaults\.exe|\\sdclt\.exe|\\eventvwr\.exe|\\slui\.exe</field>
+    <description>SentinelOps: Possible UAC bypass - auto elevating binary $(win.eventdata.parentImage) spawned $(win.eventdata.image)</description>
+    <mitre>
+      <id>T1548.002</id>
+    </mitre>
+    <group>privilege_escalation,uac_bypass,</group>
+  </rule>
+
+  <!-- 100143: scheduled task creation. Persistence that also runs with the
+       privileges of whatever principal is specified, frequently SYSTEM. -->
+  <rule id="100143" level="10">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4698$</field>
+    <description>SentinelOps: Scheduled task created on $(win.system.computer) by $(win.eventdata.subjectUserName)</description>
+    <mitre>
+      <id>T1053.005</id>
+    </mitre>
+    <group>persistence,scheduled_task,</group>
+  </rule>
+
+  <!-- 100144: same technique seen from the process side, including the high
+       risk "run as SYSTEM" and "run on logon" switches. -->
+  <rule id="100144" level="12">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.image">(?i)\\schtasks\.exe</field>
+    <field name="win.eventdata.commandLine">(?i)/create</field>
+    <description>SentinelOps: Scheduled task created from the command line - $(win.eventdata.commandLine)</description>
+    <mitre>
+      <id>T1053.005</id>
+    </mitre>
+    <group>persistence,scheduled_task,</group>
+  </rule>
+
+  <!-- 100145: service installation. 7045 in the System log is written when a
+       new service is registered, a very common privileged persistence and
+       lateral movement artefact (PsExec style tooling). -->
+  <rule id="100145" level="10">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^7045$|^4697$</field>
+    <description>SentinelOps: New Windows service installed on $(win.system.computer) - $(win.eventdata.serviceName)</description>
+    <mitre>
+      <id>T1543.003</id>
+    </mitre>
+    <group>persistence,new_service,</group>
+  </rule>
+
+
+  <!-- =======================================================================
+       CROSS CUTTING DETECTIONS
+       ======================================================================= -->
+
+  <!-- 100150: the audit log itself was cleared. There is no legitimate
+       reason for this on a monitored workstation. Critical. -->
+  <rule id="100150" level="14">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^1102$|^104$</field>
+    <description>SentinelOps: Windows event log was CLEARED on $(win.system.computer) - possible anti forensic activity</description>
+    <mitre>
+      <id>T1070.001</id>
+    </mitre>
+    <group>defense_evasion,log_cleared,</group>
+  </rule>
+
+  <!-- 100151: audit policy change - the quieter version of clearing logs. -->
+  <rule id="100151" level="12">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4719$</field>
+    <description>SentinelOps: System audit policy was changed on $(win.system.computer) by $(win.eventdata.subjectUserName)</description>
+    <mitre>
+      <id>T1562.002</id>
+    </mitre>
+    <group>defense_evasion,audit_policy,</group>
+  </rule>
+
+  <!-- 100152: Sysmon service stopped or its configuration changed. If the
+       sensor goes quiet, the analyst must know immediately. -->
+  <rule id="100152" level="12">
+    <if_group>windows</if_group>
+    <field name="win.system.providerName">(?i)Microsoft-Windows-Sysmon</field>
+    <field name="win.system.eventID">^4$|^16$</field>
+    <description>SentinelOps: Sysmon service state or configuration changed on $(win.system.computer)</description>
+    <mitre>
+      <id>T1562.001</id>
+    </mitre>
+    <group>defense_evasion,sysmon_tampering,</group>
+  </rule>
+
+  <!-- 100153: handle opened against LSASS with read access by a process that
+       is not a known security product - credential dumping telemetry. -->
+  <rule id="100153" level="14">
+    <if_group>sysmon_event_10</if_group>
+    <field name="win.eventdata.targetImage">(?i)\\lsass\.exe</field>
+    <field name="win.eventdata.grantedAccess">(?i)0x1010|0x1410|0x1438|0x143a|0x1f0fff|0x1fffff</field>
+    <description>SentinelOps: Suspicious handle opened against LSASS by $(win.eventdata.sourceImage) - possible credential dumping</description>
+    <mitre>
+      <id>T1003.001</id>
+    </mitre>
+    <group>credential_access,lsass_access,</group>
+  </rule>
+
+</group>
