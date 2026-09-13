@@ -7,6 +7,8 @@ backed by something you can show.
 
 ---
 
+## The 15 questions
+
 ### 1. What is a SIEM, and what does it do?
 
 **Ideal answer.** A SIEM (Security Information and Event Management) platform centrally

@@ -4,7 +4,7 @@
 >
 > This file states what **should** happen when each sample event is run through
 > `wazuh-logtest`. **None of it has been executed** — the SentinelOps stack has not been
-> built. The only thing that can prove a rule fires is [`run-logtest.sh`](run-logtest.sh),
+> built. The only thing that can prove a rule fires is [`run-logtest.sh`](../run-logtest.sh),
 > and it can only run on an installed Wazuh manager that already has
 > `detection-rules/local_rules.xml` deployed. Treat every row below as a *prediction to be
 > verified*, not a result. Rows whose rule carries `NEEDS-LOGTEST-VERIFICATION` in
