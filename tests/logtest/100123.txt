@@ -1,0 +1,1 @@
+{"win": {"system": {"providerName": "Microsoft-Windows-Security-Auditing", "eventID": "4726", "channel": "Security", "computer": "WIN-SOC-EP01", "systemTime": "2026-01-01T00:00:00.000000000Z"}, "eventdata": {"targetUserName": "lab-svc-update", "subjectUserName": "lab-admin"}}}

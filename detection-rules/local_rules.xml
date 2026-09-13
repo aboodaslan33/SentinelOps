@@ -33,6 +33,21 @@
   /documentation/detection-engineering.md.
 
   ...........................................................................
+  REGEX ENGINE NOTE (see the per-rule REGEX AUDIT comments below)
+  ...........................................................................
+  A Wazuh <field> uses the OS_Regex engine BY DEFAULT and PCRE2 only when the
+  field carries type="pcre2". OS_Regex does NOT support (?i), {n,m}
+  quantifiers or (grouping)? - those are PCRE2 syntax. Every field in this
+  file that begins with (?i) is therefore declared type="pcre2"; the plain
+  numeric win.system.eventID fields stay on OS_Regex.
+  Backslash escaping for a literal path separator is \\ under BOTH engines,
+  but whether the Wazuh-decoded eventdata value contains one or two
+  backslashes is decoder/version dependent. Rules whose match therefore
+  cannot be confirmed by inspection alone are marked NEEDS-LOGTEST-
+  VERIFICATION and MUST be proven with tests/run-logtest.sh before use.
+  NONE OF THESE RULES HAVE BEEN RUN THROUGH wazuh-logtest YET.
+
+  ...........................................................................
   FIELD REFERENCE (Wazuh lowercases the first letter of every EventData name)
   ...........................................................................
       win.system.eventID              win.eventdata.targetUserName
@@ -69,6 +84,7 @@
        (mistyped password). The value of this rule is that it normalises the
        fields the correlation rules below depend on. -->
   <rule id="100100" level="3">
+    <!-- REGEX AUDIT [100100]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4625$</field>
     <description>SentinelOps: Windows failed logon for user $(win.eventdata.targetUserName) from $(win.eventdata.ipAddress) [logon type $(win.eventdata.logonType)]</description>
@@ -83,6 +99,7 @@
        another. Threshold chosen from the lab baseline: a real user rarely
        fails more than 3 times before using the password reset flow. -->
   <rule id="100101" level="10" frequency="8" timeframe="120">
+    <!-- REGEX AUDIT [100101]: no regex field - correlation via if_matched_sid + same_field/different_field + frequency/timeframe. No regex engine and therefore no escaping question; correlation behaviour can only be proven live -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_matched_sid>100100</if_matched_sid>
     <same_field>win.eventdata.ipAddress</same_field>
     <description>SentinelOps: Possible brute force - 8 or more failed logons from $(win.eventdata.ipAddress) within 120 seconds</description>
@@ -96,6 +113,7 @@
        same source IP that just produced a burst of failures means the guess
        may have worked. This is a High severity, escalate immediately. -->
   <rule id="100102" level="12" timeframe="600">
+    <!-- REGEX AUDIT [100102]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4624$</field>
     <if_matched_sid>100101</if_matched_sid>
@@ -111,6 +129,7 @@
   <!-- 100103: account lockout. Confirms the threshold policy fired and is a
        useful corroborating artefact in the incident report. -->
   <rule id="100103" level="8">
+    <!-- REGEX AUDIT [100103]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4740$</field>
     <description>SentinelOps: Account $(win.eventdata.targetUserName) locked out after repeated failed logons</description>
@@ -123,6 +142,7 @@
   <!-- 100104: password spraying shape - many DIFFERENT usernames failing
        from one source. Distinguished from 100101 by breadth, not depth. -->
   <rule id="100104" level="12" frequency="10" timeframe="300">
+    <!-- REGEX AUDIT [100104]: no regex field - correlation via if_matched_sid + same_field/different_field + frequency/timeframe. No regex engine and therefore no escaping question; correlation behaviour can only be proven live -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_matched_sid>100100</if_matched_sid>
     <same_field>win.eventdata.ipAddress</same_field>
     <different_field>win.eventdata.targetUserName</different_field>
@@ -143,8 +163,9 @@
   <!-- 100110: every PowerShell launch, kept at informational level so it can
        be used for hunting and as a parent for the rules below. -->
   <rule id="100110" level="3">
+    <!-- REGEX AUDIT [100110]: field declared type="pcre2" (required by the (?i) flag). No backslash path; \. escapes a literal dot correctly under PCRE2. Confirm alternation/case-fold against real events -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event1</if_group>
-    <field name="win.eventdata.originalFileName">(?i)powershell\.exe|pwsh\.dll</field>
+    <field name="win.eventdata.originalFileName" type="pcre2">(?i)powershell\.exe|pwsh\.dll</field>
     <description>SentinelOps: PowerShell executed by $(win.eventdata.user) - parent $(win.eventdata.parentImage)</description>
     <mitre>
       <id>T1059.001</id>
@@ -158,9 +179,10 @@
        Matching on the abbreviations too (-w, -nop, -e) is deliberate:
        PowerShell accepts any unambiguous prefix of a parameter name. -->
   <rule id="100111" level="10">
+    <!-- REGEX AUDIT [100111]: path field(s) declared type="pcre2" because (?i) is PCRE2 syntax (OS_Regex would treat (?i) as literal chars and never match). Under PCRE2, \\ = one literal backslash and \. = one literal dot, so the escaping written here is correct FOR PCRE2. Whether the Wazuh-decoded eventdata path holds one or two backslashes is decoder/version dependent and is NOT verified here -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event1</if_group>
-    <field name="win.eventdata.image">(?i)\\powershell\.exe|\\pwsh\.exe</field>
-    <field name="win.eventdata.commandLine">(?i)-enc|-encodedcommand|-e |-ec |-w hidden|-windowstyle hidden|-nop|-noprofile|-exec bypass|-executionpolicy bypass|-nonI</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\powershell\.exe|\\pwsh\.exe</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)-enc|-encodedcommand|-e |-ec |-w hidden|-windowstyle hidden|-nop|-noprofile|-exec bypass|-executionpolicy bypass|-nonI</field>
     <description>SentinelOps: Suspicious PowerShell command line (hidden window / encoded / policy bypass) executed by $(win.eventdata.user)</description>
     <mitre>
       <id>T1059.001</id>
@@ -173,9 +195,10 @@
        should never spawn a shell. This is the single highest fidelity
        phishing detection available from process telemetry alone. -->
   <rule id="100112" level="12">
+    <!-- REGEX AUDIT [100112]: path field(s) declared type="pcre2" because (?i) is PCRE2 syntax (OS_Regex would treat (?i) as literal chars and never match). Under PCRE2, \\ = one literal backslash and \. = one literal dot, so the escaping written here is correct FOR PCRE2. Whether the Wazuh-decoded eventdata path holds one or two backslashes is decoder/version dependent and is NOT verified here -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event1</if_group>
-    <field name="win.eventdata.parentImage">(?i)\\winword\.exe|\\excel\.exe|\\powerpnt\.exe|\\outlook\.exe|\\msaccess\.exe|\\wscript\.exe|\\cscript\.exe|\\mshta\.exe</field>
-    <field name="win.eventdata.image">(?i)\\powershell\.exe|\\pwsh\.exe|\\cmd\.exe|\\wscript\.exe|\\cscript\.exe|\\mshta\.exe|\\rundll32\.exe|\\regsvr32\.exe</field>
+    <field name="win.eventdata.parentImage" type="pcre2">(?i)\\winword\.exe|\\excel\.exe|\\powerpnt\.exe|\\outlook\.exe|\\msaccess\.exe|\\wscript\.exe|\\cscript\.exe|\\mshta\.exe</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\powershell\.exe|\\pwsh\.exe|\\cmd\.exe|\\wscript\.exe|\\cscript\.exe|\\mshta\.exe|\\rundll32\.exe|\\regsvr32\.exe</field>
     <description>SentinelOps: Office or script host $(win.eventdata.parentImage) spawned $(win.eventdata.image) - possible malicious document</description>
     <mitre>
       <id>T1204.002</id>
@@ -188,9 +211,10 @@
        code, so it catches download cradles even when the command line was
        Base64 encoded. This is why script block logging must be enabled. -->
   <rule id="100113" level="12">
+    <!-- REGEX AUDIT [100113]: win.system.eventID -> OS_Regex (digits/anchors, escaping correct). Other field(s) -> declared type="pcre2" for the (?i) flag; no backslash path, only case-fold/anchors apply (correct under PCRE2). Prove with tests/run-logtest.sh -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4104$</field>
-    <field name="win.eventdata.scriptBlockText">(?i)downloadstring|downloadfile|downloaddata|invoke-webrequest|invoke-restmethod|net\.webclient|start-bitstransfer|iex |invoke-expression|frombase64string</field>
+    <field name="win.eventdata.scriptBlockText" type="pcre2">(?i)downloadstring|downloadfile|downloaddata|invoke-webrequest|invoke-restmethod|net\.webclient|start-bitstransfer|iex |invoke-expression|frombase64string</field>
     <description>SentinelOps: PowerShell script block contains a download or in-memory execution cradle on $(win.system.computer)</description>
     <mitre>
       <id>T1059.001</id>
@@ -202,8 +226,9 @@
   <!-- 100114: PowerShell making an outbound network connection. Pairs with
        100113 to confirm the download actually happened. -->
   <rule id="100114" level="10">
+    <!-- REGEX AUDIT [100114]: path field(s) declared type="pcre2" because (?i) is PCRE2 syntax (OS_Regex would treat (?i) as literal chars and never match). Under PCRE2, \\ = one literal backslash and \. = one literal dot, so the escaping written here is correct FOR PCRE2. Whether the Wazuh-decoded eventdata path holds one or two backslashes is decoder/version dependent and is NOT verified here -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event3</if_group>
-    <field name="win.eventdata.image">(?i)\\powershell\.exe|\\pwsh\.exe|\\cmd\.exe|\\wscript\.exe|\\cscript\.exe|\\mshta\.exe</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\powershell\.exe|\\pwsh\.exe|\\cmd\.exe|\\wscript\.exe|\\cscript\.exe|\\mshta\.exe</field>
     <description>SentinelOps: Interpreter $(win.eventdata.image) connected to $(win.eventdata.destinationIp):$(win.eventdata.destinationPort)</description>
     <mitre>
       <id>T1059.001</id>
@@ -214,9 +239,10 @@
 
   <!-- 100115: tampering with logging or defences from PowerShell. -->
   <rule id="100115" level="13">
+    <!-- REGEX AUDIT [100115]: win.system.eventID -> OS_Regex (digits/anchors, escaping correct). Other field(s) -> declared type="pcre2" for the (?i) flag; no backslash path, only case-fold/anchors apply (correct under PCRE2). Prove with tests/run-logtest.sh -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4104$</field>
-    <field name="win.eventdata.scriptBlockText">(?i)set-mppreference|add-mppreference -exclusionpath|disablerealtimemonitoring|clear-eventlog|remove-eventlog|wevtutil cl</field>
+    <field name="win.eventdata.scriptBlockText" type="pcre2">(?i)set-mppreference|add-mppreference -exclusionpath|disablerealtimemonitoring|clear-eventlog|remove-eventlog|wevtutil cl</field>
     <description>SentinelOps: PowerShell attempted to disable defences or clear logs on $(win.system.computer)</description>
     <mitre>
       <id>T1562.001</id>
@@ -236,6 +262,7 @@
        single user workstation account creation is ALWAYS worth a look, even
        when it turns out to be IT provisioning. -->
   <rule id="100120" level="8">
+    <!-- REGEX AUDIT [100120]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4720$</field>
     <description>SentinelOps: Local user account $(win.eventdata.targetUserName) created on $(win.system.computer) by $(win.eventdata.subjectUserName)</description>
@@ -249,6 +276,7 @@
        privileged local group within 5 minutes of creation is the classic
        "create a backdoor admin" sequence. High severity. -->
   <rule id="100121" level="13" timeframe="300">
+    <!-- REGEX AUDIT [100121]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4732$</field>
     <if_matched_sid>100120</if_matched_sid>
@@ -263,6 +291,7 @@
   <!-- 100122: account enabled / password set immediately after creation.
        Useful corroboration for the incident timeline. -->
   <rule id="100122" level="5">
+    <!-- REGEX AUDIT [100122]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4722$|^4724$|^4738$</field>
     <description>SentinelOps: Account $(win.eventdata.targetUserName) was enabled, reset or modified by $(win.eventdata.subjectUserName)</description>
@@ -275,6 +304,7 @@
   <!-- 100123: account deletion. Often the clean up step of an intrusion, and
        also a genuine impact technique when a real user loses access. -->
   <rule id="100123" level="8">
+    <!-- REGEX AUDIT [100123]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4726$</field>
     <description>SentinelOps: Local user account $(win.eventdata.targetUserName) was DELETED on $(win.system.computer) by $(win.eventdata.subjectUserName)</description>
@@ -294,8 +324,9 @@
   <!-- 100130: single discovery command. Informational on its own - admins
        and scripts run whoami and ipconfig all day. -->
   <rule id="100130" level="3">
+    <!-- REGEX AUDIT [100130]: path field(s) declared type="pcre2" because (?i) is PCRE2 syntax (OS_Regex would treat (?i) as literal chars and never match). Under PCRE2, \\ = one literal backslash and \. = one literal dot, so the escaping written here is correct FOR PCRE2. Whether the Wazuh-decoded eventdata path holds one or two backslashes is decoder/version dependent and is NOT verified here -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event1</if_group>
-    <field name="win.eventdata.image">(?i)\\whoami\.exe|\\systeminfo\.exe|\\ipconfig\.exe|\\net\.exe|\\net1\.exe|\\nltest\.exe|\\quser\.exe|\\tasklist\.exe|\\arp\.exe|\\route\.exe|\\netstat\.exe</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\whoami\.exe|\\systeminfo\.exe|\\ipconfig\.exe|\\net\.exe|\\net1\.exe|\\nltest\.exe|\\quser\.exe|\\tasklist\.exe|\\arp\.exe|\\route\.exe|\\netstat\.exe</field>
     <description>SentinelOps: Discovery command $(win.eventdata.image) executed by $(win.eventdata.user)</description>
     <mitre>
       <id>T1082</id>
@@ -307,6 +338,7 @@
        commands on the same host inside 60 seconds is host reconnaissance,
        not an administrator troubleshooting. -->
   <rule id="100131" level="12" frequency="5" timeframe="60">
+    <!-- REGEX AUDIT [100131]: no regex field - correlation via if_matched_sid + same_field/different_field + frequency/timeframe. No regex engine and therefore no escaping question; correlation behaviour can only be proven live -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_matched_sid>100130</if_matched_sid>
     <same_field>win.system.computer</same_field>
     <different_field>win.eventdata.image</different_field>
@@ -324,8 +356,9 @@
        remote content. These command line shapes have no benign explanation
        on a user workstation. -->
   <rule id="100132" level="13">
+    <!-- REGEX AUDIT [100132]: commandLine declared type="pcre2": uses (?i), the {0,80} bounded quantifier and (..)? groups - all PCRE2-only (OS_Regex supports none of them). No backslash path; \. escapes a dot correctly under PCRE2. Confirm the quantifier/alternation matches real command lines -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event1</if_group>
-    <field name="win.eventdata.commandLine">(?i)certutil(\.exe)?.{0,80}(-urlcache|-decode|-encode)|bitsadmin(\.exe)?.{0,80}/transfer|mshta(\.exe)?.{0,80}(http|javascript:|vbscript:)|regsvr32(\.exe)?.{0,80}(/i:http|scrobj\.dll)|rundll32(\.exe)?.{0,80}(javascript:|http)</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)certutil(\.exe)?.{0,80}(-urlcache|-decode|-encode)|bitsadmin(\.exe)?.{0,80}/transfer|mshta(\.exe)?.{0,80}(http|javascript:|vbscript:)|regsvr32(\.exe)?.{0,80}(/i:http|scrobj\.dll)|rundll32(\.exe)?.{0,80}(javascript:|http)</field>
     <description>SentinelOps: Living off the land binary used to download or execute remote content - $(win.eventdata.commandLine)</description>
     <mitre>
       <id>T1218</id>
@@ -338,8 +371,9 @@
        installers do this occasionally, so this is Medium, not High: it is a
        strong PIVOT, not a verdict. -->
   <rule id="100133" level="10">
+    <!-- REGEX AUDIT [100133]: path field(s) declared type="pcre2" because (?i) is PCRE2 syntax (OS_Regex would treat (?i) as literal chars and never match). Under PCRE2, \\ = one literal backslash and \. = one literal dot, so the escaping written here is correct FOR PCRE2. Whether the Wazuh-decoded eventdata path holds one or two backslashes is decoder/version dependent and is NOT verified here -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event1</if_group>
-    <field name="win.eventdata.image">(?i)\\AppData\\Local\\Temp\\|\\Users\\Public\\|\\Downloads\\|C:\\Windows\\Temp\\|\\AppData\\Roaming\\</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\AppData\\Local\\Temp\\|\\Users\\Public\\|\\Downloads\\|C:\\Windows\\Temp\\|\\AppData\\Roaming\\</field>
     <description>SentinelOps: Process executed from a user writable staging directory - $(win.eventdata.image)</description>
     <mitre>
       <id>T1204.002</id>
@@ -351,9 +385,10 @@
        OriginalFileName recorded in the PE header has been renamed, which is
        a deliberate evasion step. Requires Sysmon (4688 cannot do this). -->
   <rule id="100134" level="12">
+    <!-- REGEX AUDIT [100134]: originalFileName and image declared type="pcre2"; image uses negate="yes". Under PCRE2 \\ = one literal backslash and \. a literal dot (correct). Decoded-path backslash count and the negate interaction are unverified -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event1</if_group>
-    <field name="win.eventdata.originalFileName">(?i)^(powershell\.exe|cmd\.exe|psexec\.c|mimikatz\.exe|procdump)</field>
-    <field name="win.eventdata.image" negate="yes">(?i)\\powershell\.exe|\\cmd\.exe|\\psexec(64)?\.exe|\\procdump(64)?\.exe</field>
+    <field name="win.eventdata.originalFileName" type="pcre2">(?i)^(powershell\.exe|cmd\.exe|psexec\.c|mimikatz\.exe|procdump)</field>
+    <field name="win.eventdata.image" negate="yes" type="pcre2">(?i)\\powershell\.exe|\\cmd\.exe|\\psexec(64)?\.exe|\\procdump(64)?\.exe</field>
     <description>SentinelOps: Possible masquerading - image $(win.eventdata.image) does not match original file name $(win.eventdata.originalFileName)</description>
     <mitre>
       <id>T1036.003</id>
@@ -371,9 +406,10 @@
   <!-- 100140: membership change on a privileged local group. On a single
        user workstation this should happen only during IT provisioning. -->
   <rule id="100140" level="12">
+    <!-- REGEX AUDIT [100140]: win.system.eventID -> OS_Regex (digits/anchors, escaping correct). Other field(s) -> declared type="pcre2" for the (?i) flag; no backslash path, only case-fold/anchors apply (correct under PCRE2). Prove with tests/run-logtest.sh -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4732$</field>
-    <field name="win.eventdata.targetUserName">(?i)^Administrators$|^Remote Desktop Users$|^Backup Operators$|^Power Users$</field>
+    <field name="win.eventdata.targetUserName" type="pcre2">(?i)^Administrators$|^Remote Desktop Users$|^Backup Operators$|^Power Users$</field>
     <description>SentinelOps: $(win.eventdata.memberName) was added to privileged group $(win.eventdata.targetUserName) on $(win.system.computer) by $(win.eventdata.subjectUserName)</description>
     <mitre>
       <id>T1098.007</id>
@@ -386,9 +422,10 @@
        kept Low - this is CONTEXT for an investigation, not an alert to chase
        on its own. -->
   <rule id="100141" level="5">
+    <!-- REGEX AUDIT [100141]: win.system.eventID -> OS_Regex (correct). subjectUserName -> declared type="pcre2" (for (?i) and negate); note \$$ matches a trailing literal "$" (computer accounts) - correct under PCRE2 where \$ escapes the anchor metachar. Confirm trailing-"$" handling -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4672$</field>
-    <field name="win.eventdata.subjectUserName" negate="yes">(?i)^SYSTEM$|^LOCAL SERVICE$|^NETWORK SERVICE$|\$$</field>
+    <field name="win.eventdata.subjectUserName" negate="yes" type="pcre2">(?i)^SYSTEM$|^LOCAL SERVICE$|^NETWORK SERVICE$|\$$</field>
     <description>SentinelOps: Administrative privileges assigned to logon of $(win.eventdata.subjectUserName) on $(win.system.computer)</description>
     <mitre>
       <id>T1078.003</id>
@@ -400,8 +437,9 @@
        sdclt are auto elevating Microsoft binaries that attackers hijack via
        the registry. A child process under them is the detection. -->
   <rule id="100142" level="13">
+    <!-- REGEX AUDIT [100142]: path field(s) declared type="pcre2" because (?i) is PCRE2 syntax (OS_Regex would treat (?i) as literal chars and never match). Under PCRE2, \\ = one literal backslash and \. = one literal dot, so the escaping written here is correct FOR PCRE2. Whether the Wazuh-decoded eventdata path holds one or two backslashes is decoder/version dependent and is NOT verified here -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event1</if_group>
-    <field name="win.eventdata.parentImage">(?i)\\fodhelper\.exe|\\computerdefaults\.exe|\\sdclt\.exe|\\eventvwr\.exe|\\slui\.exe</field>
+    <field name="win.eventdata.parentImage" type="pcre2">(?i)\\fodhelper\.exe|\\computerdefaults\.exe|\\sdclt\.exe|\\eventvwr\.exe|\\slui\.exe</field>
     <description>SentinelOps: Possible UAC bypass - auto elevating binary $(win.eventdata.parentImage) spawned $(win.eventdata.image)</description>
     <mitre>
       <id>T1548.002</id>
@@ -412,6 +450,7 @@
   <!-- 100143: scheduled task creation. Persistence that also runs with the
        privileges of whatever principal is specified, frequently SYSTEM. -->
   <rule id="100143" level="10">
+    <!-- REGEX AUDIT [100143]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4698$</field>
     <description>SentinelOps: Scheduled task created on $(win.system.computer) by $(win.eventdata.subjectUserName)</description>
@@ -424,9 +463,10 @@
   <!-- 100144: same technique seen from the process side, including the high
        risk "run as SYSTEM" and "run on logon" switches. -->
   <rule id="100144" level="12">
+    <!-- REGEX AUDIT [100144]: path field(s) declared type="pcre2" because (?i) is PCRE2 syntax (OS_Regex would treat (?i) as literal chars and never match). Under PCRE2, \\ = one literal backslash and \. = one literal dot, so the escaping written here is correct FOR PCRE2. Whether the Wazuh-decoded eventdata path holds one or two backslashes is decoder/version dependent and is NOT verified here -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event1</if_group>
-    <field name="win.eventdata.image">(?i)\\schtasks\.exe</field>
-    <field name="win.eventdata.commandLine">(?i)/create</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\schtasks\.exe</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)/create</field>
     <description>SentinelOps: Scheduled task created from the command line - $(win.eventdata.commandLine)</description>
     <mitre>
       <id>T1053.005</id>
@@ -438,6 +478,7 @@
        new service is registered, a very common privileged persistence and
        lateral movement artefact (PsExec style tooling). -->
   <rule id="100145" level="10">
+    <!-- REGEX AUDIT [100145]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^7045$|^4697$</field>
     <description>SentinelOps: New Windows service installed on $(win.system.computer) - $(win.eventdata.serviceName)</description>
@@ -455,6 +496,7 @@
   <!-- 100150: the audit log itself was cleared. There is no legitimate
        reason for this on a monitored workstation. Critical. -->
   <rule id="100150" level="14">
+    <!-- REGEX AUDIT [100150]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^1102$|^104$</field>
     <description>SentinelOps: Windows event log was CLEARED on $(win.system.computer) - possible anti forensic activity</description>
@@ -466,6 +508,7 @@
 
   <!-- 100151: audit policy change - the quieter version of clearing logs. -->
   <rule id="100151" level="12">
+    <!-- REGEX AUDIT [100151]: win.system.eventID uses the DEFAULT OS_Regex engine. The pattern is digits with ^ $ | only (all valid OS_Regex); no backslash or case-folding, so escaping is correct FOR OS_Regex. Firing still depends on chaining/decoding - prove with tests/run-logtest.sh. -->
     <if_group>windows</if_group>
     <field name="win.system.eventID">^4719$</field>
     <description>SentinelOps: System audit policy was changed on $(win.system.computer) by $(win.eventdata.subjectUserName)</description>
@@ -478,8 +521,9 @@
   <!-- 100152: Sysmon service stopped or its configuration changed. If the
        sensor goes quiet, the analyst must know immediately. -->
   <rule id="100152" level="12">
+    <!-- REGEX AUDIT [100152]: win.system.eventID -> OS_Regex (digits/anchors, escaping correct). Other field(s) -> declared type="pcre2" for the (?i) flag; no backslash path, only case-fold/anchors apply (correct under PCRE2). Prove with tests/run-logtest.sh -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>windows</if_group>
-    <field name="win.system.providerName">(?i)Microsoft-Windows-Sysmon</field>
+    <field name="win.system.providerName" type="pcre2">(?i)Microsoft-Windows-Sysmon</field>
     <field name="win.system.eventID">^4$|^16$</field>
     <description>SentinelOps: Sysmon service state or configuration changed on $(win.system.computer)</description>
     <mitre>
@@ -491,9 +535,10 @@
   <!-- 100153: handle opened against LSASS with read access by a process that
        is not a known security product - credential dumping telemetry. -->
   <rule id="100153" level="14">
+    <!-- REGEX AUDIT [100153]: path field(s) declared type="pcre2" because (?i) is PCRE2 syntax (OS_Regex would treat (?i) as literal chars and never match). Under PCRE2, \\ = one literal backslash and \. = one literal dot, so the escaping written here is correct FOR PCRE2. Whether the Wazuh-decoded eventdata path holds one or two backslashes is decoder/version dependent and is NOT verified here -> NEEDS-LOGTEST-VERIFICATION. -->
     <if_group>sysmon_event_10</if_group>
-    <field name="win.eventdata.targetImage">(?i)\\lsass\.exe</field>
-    <field name="win.eventdata.grantedAccess">(?i)0x1010|0x1410|0x1438|0x143a|0x1f0fff|0x1fffff</field>
+    <field name="win.eventdata.targetImage" type="pcre2">(?i)\\lsass\.exe</field>
+    <field name="win.eventdata.grantedAccess" type="pcre2">(?i)0x1010|0x1410|0x1438|0x143a|0x1f0fff|0x1fffff</field>
     <description>SentinelOps: Suspicious handle opened against LSASS by $(win.eventdata.sourceImage) - possible credential dumping</description>
     <mitre>
       <id>T1003.001</id>

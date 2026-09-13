@@ -1,0 +1,1 @@
+{"win": {"system": {"providerName": "Microsoft-Windows-Sysmon", "eventID": "16", "channel": "Microsoft-Windows-Sysmon/Operational", "computer": "WIN-SOC-EP01", "systemTime": "2026-01-01T00:00:00.000000000Z"}, "eventdata": {"configuration": "C:\\Lab\\Sysmon\\sysmon-config.xml", "configurationFileHash": "SHA256=ABC"}}}

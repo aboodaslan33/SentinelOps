@@ -110,18 +110,23 @@ Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 20000 |
     Group-Object Id | Sort-Object Count -Descending | Format-Table Count, Name
 ```
 
-**Baseline findings recorded in this lab** (single idle Windows 11 VM, 48 hours):
+**Baseline findings — NOT YET MEASURED.** The lab has not been built or run, so the table
+below is a **worked example** of the reasoning, not data collected from a real baseline. The
+"Value" column shows illustrative figures used to derive the current thresholds; the
+"Measured value" column must be filled in from your own 48-hour baseline before the thresholds
+are trusted. Where your measurement differs, retune the rule.
 
-| Observation | Value | Consequence for the rules |
-|---|---|---|
-| Highest legitimate failed-logon burst | 3 in 2 minutes (expired password) | Brute-force threshold set to **8 in 120 s** |
-| Discovery commands run by the user/OS per hour | 0–2, never more than 2 distinct binaries in a minute | Recon burst threshold set to **5 distinct in 60 s** |
-| Encoded PowerShell from legitimate software | 0 occurrences | Suspicious-switch rule needs no exclusions in this lab |
-| Local accounts created | 0 | Every 4720 is worth alerting on (level 8) |
-| 4672 events per day | ~40 (SYSTEM and service logons) | Excluded service accounts, dropped to level 5 |
+| Observation | Illustrative value (assumed) | Measured value | Consequence for the rules |
+|---|---|---|---|
+| Highest legitimate failed-logon burst | e.g. 3 in 2 minutes (expired password) | `<NOT YET MEASURED>` | Brute-force threshold currently **8 in 120 s** |
+| Discovery commands run by the user/OS per hour | e.g. 0–2, rarely >2 distinct binaries/minute | `<NOT YET MEASURED>` | Recon burst threshold currently **5 distinct in 60 s** |
+| Encoded PowerShell from legitimate software | assumed 0 | `<NOT YET MEASURED>` | Suspicious-switch rule currently has no exclusions |
+| Local accounts created | assumed 0 | `<NOT YET MEASURED>` | Every 4720 alerts (level 8) |
+| 4672 events per day | assumed tens (SYSTEM/service logons) | `<NOT YET MEASURED>` | Service accounts excluded, dropped to level 5 |
 
-**Thresholds must come from measurement, not from a blog post.** Copying a number without
-baselining is how a SOC ends up with an alert queue nobody reads.
+**Thresholds must come from measurement, not from a blog post — and not from this table.**
+The figures above are assumptions used to author the first draft of the rules; copying a number
+without baselining your own environment is how a SOC ends up with an alert queue nobody reads.
 
 ---
 

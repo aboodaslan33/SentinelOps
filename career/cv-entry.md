@@ -17,14 +17,16 @@ this lab — no enterprise or production experience is claimed.
   suspicious PowerShell, backdoor account creation, host reconnaissance, privilege escalation),
   using correlation (frequency/timeframe/same-field) and mapping every detection to **MITRE
   ATT&CK** techniques.
-- Validated detections end to end with safe, self-authored PowerShell simulation scripts, then
-  triaged and documented the resulting alerts as **five full incident reports** following a
-  structured investigation workflow (triage → validate → investigate → contain → document).
+- Authored safe, self-written PowerShell simulation scripts to generate the telemetry each
+  technique produces, plus **five incident-report templates** structured around a full
+  investigation workflow (triage → validate → investigate → contain → document) to be
+  completed with real captured evidence.
 - Designed **Wazuh dashboards** for authentication, endpoint activity, alert timeline and ATT&CK
   coverage, and wrote **five SOC analyst playbooks** plus installation, detection-engineering
   and incident-response documentation.
-- Achieved a measured ~21 s mean time-to-detect across the five scenarios in the lab, and
-  documented false positives, tuning decisions and honest detection-coverage gaps.
+- Documented expected false positives, tuning decisions and honest detection-coverage gaps for
+  each scenario. *(Note: fill in real metrics such as time-to-detect only after building the
+  lab and running the simulations — do not claim measured figures you have not produced.)*
 
 ---
 

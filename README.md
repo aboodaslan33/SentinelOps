@@ -218,8 +218,9 @@ The ten recommended screenshots (and how to capture and redact them) are listed 
 - **Correlation beats single events.** The highest-value alerts (successful logon after a brute
   force; a new account promoted to admin within minutes) come from linking events, not matching
   one.
-- **Thresholds must be measured, not copied.** Baselining the lab for 48 hours produced defensible
-  numbers and revealed weaknesses (a fixed correlation window is evaded by a slow attacker).
+- **Thresholds must be measured, not copied.** The current thresholds are first-draft values
+  derived from assumed baselines; once the lab is built, a 48-hour baseline must confirm or
+  retune them (a fixed correlation window is, by design, evaded by a slow attacker).
 - **Field names and rule chaining are where custom rules fail.** Wazuh lowercases event fields
   and matches one rule per level — chaining on stable group names, verified with `wazuh-logtest`,
   is what makes a rule actually fire.

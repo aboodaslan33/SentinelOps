@@ -24,7 +24,7 @@ Everything that must exist **before** an incident.
 |---|---|
 | **Visibility** | Wazuh agent on the endpoint; Security, System, Application, Sysmon, PowerShell and Task Scheduler channels collected |
 | **Detection content** | 30 custom rules covering 5 scenarios, each documented and MITRE-mapped |
-| **Baseline** | 48-hour measured baseline of normal activity (see `detection-engineering.md` §4) |
+| **Baseline** | 48-hour baseline of normal activity **to be captured** once the lab runs (see `detection-engineering.md` §4) |
 | **Playbooks** | Five step-by-step playbooks in [`/playbooks`](../playbooks) |
 | **Documentation templates** | Incident report template used by all five reports in [`/incidents`](../incidents) |
 | **Asset inventory** | Host names, IPs, roles and owners recorded in [`architecture.md`](../architecture/architecture.md) |

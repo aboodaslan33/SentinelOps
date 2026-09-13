@@ -1,0 +1,1 @@
+{"win": {"system": {"providerName": "Microsoft-Windows-Eventlog", "eventID": "1102", "channel": "Security", "computer": "WIN-SOC-EP01", "systemTime": "2026-01-01T00:00:00.000000000Z"}, "eventdata": {"subjectUserName": "lab-admin", "subjectLogonId": "0x4f1c3"}}}

@@ -1,0 +1,1 @@
+{"win": {"system": {"providerName": "Service Control Manager", "eventID": "7045", "channel": "System", "computer": "WIN-SOC-EP01", "systemTime": "2026-01-01T00:00:00.000000000Z"}, "eventdata": {"serviceName": "EvilSvc", "imagePath": "C:\\Users\\Public\\svc.exe", "serviceType": "user mode service", "startType": "auto start", "accountName": "LocalSystem"}}}

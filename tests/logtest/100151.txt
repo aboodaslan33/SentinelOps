@@ -1,0 +1,1 @@
+{"win": {"system": {"providerName": "Microsoft-Windows-Security-Auditing", "eventID": "4719", "channel": "Security", "computer": "WIN-SOC-EP01", "systemTime": "2026-01-01T00:00:00.000000000Z"}, "eventdata": {"subjectUserName": "lab-admin", "categoryId": "%%8280", "subcategoryId": "%%14337"}}}
